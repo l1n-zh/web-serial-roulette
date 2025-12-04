@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Serial Roulette</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS & QRCode -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body {
+            background-color: #1e1e1e;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            /* 防止捲動 */
+            user-select: none;
+        }
+
+        canvas {
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            border-radius: 50%;
+        }
+
+        .debug-panel {
+            border-top: 1px solid #333;
+            background: rgba(17, 17, 17, 0.95);
+            backdrop-filter: blur(5px);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        /* 自訂捲軸 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        /* SVG 圖示動畫變色 */
+        .icon-transition {
+            transition: color 0.3s ease;
+        }
+
+        /* Modal Transitions */
+        .modal-enter {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+
+        .modal-enter-active {
+            opacity: 1;
+            transform: scale(1);
+            transition: all 0.3s ease-out;
+        }
+
+        .modal-exit {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .modal-exit-active {
+            opacity: 0;
+            transform: scale(0.95);
+            transition: all 0.2s ease-in;
+        }
+
+        /* ===== Mobile RWD ===== */
+
+        /* 轉盤響應式尺寸 */
+        #wheelCanvas {
+            width: min(90vw, 600px);
+            height: min(90vw, 600px);
+        }
+
+        /* 手機端樣式 */
+        @media (max-width: 640px) {
+            body {
+                overflow-y: auto;
+            }
+
+            /* 指針縮小 */
+            #pointer>div {
+                width: 1.75rem;
+                height: 2.5rem;
+            }
+
+            /* Host Info Panel - 手機端居中置頂 */
+            #hostInfo {
+                left: 50% !important;
+                transform: translateX(-50%);
+                right: auto !important;
+            }
+
+            #hostInfoContainer {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            #hostInfoDetails {
+                max-width: 0vw !important;
+                max-height: 0vh !important;
+                padding: 0 !important;
+            }
+
+            #hostInfoDetails[data-expanded="true"] {
+                max-width: 100vw !important;
+                max-height: 100vh !important;
+                padding: 1em !important;
+            }
+
+            /* Toggle button 在手機上永遠可見 */
+            #btnToggleHostInfo {
+                width: 100% !important;
+                height: 1.5rem !important;
+                opacity: 1 !important;
+                border-left: none !important;
+                border-top: 1px solid rgba(107, 114, 128, 0.5);
+            }
+
+            #btnToggleHostInfo svg {
+                transform: rotate(90deg);
+            }
+
+            #hostInfoContainer[data-expanded="false"] #btnToggleHostInfo svg {
+                transform: rotate(-90deg);
+            }
+
+            /* Guest Info Panel - 手機端居中置頂 */
+            #guestInfo {
+                left: 50% !important;
+                transform: translateX(-50%);
+                right: auto !important;
+            }
+
+            /* 底部按鈕調整 - 縮小間距 */
+            #btnUartIcon {
+                bottom: 1rem;
+                left: 1rem;
+                padding: 0.5rem;
+            }
+
+            #btnOpenDebug {
+                bottom: 1rem;
+                right: 1rem;
+                padding: 0.375rem;
+            }
+
+            /* Debug Panel - 手機端佈局 */
+            #debugContainer {
+                height: auto;
+                max-height: 60vh;
+            }
+
+            #debugContainer>div:last-child {
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+
+            #debugContainer>div:last-child>div:first-child {
+                width: 100%;
+                border-right: none;
+                border-bottom: 1px solid #374151;
+                padding-bottom: 0.75rem;
+                padding-right: 0;
+            }
+
+            /* 隱藏手動發送區的標題文字 */
+            #debugContainer .font-bold.text-gray-400.mb-1:first-of-type {
+                font-size: 0.7rem;
+            }
+
+            /* Error Banner 調整 */
+            #errorBanner {
+                left: 1rem;
+                right: 1rem;
+                text-align: center;
+            }
+        }
+
+        /* 平板端微調 */
+        @media (min-width: 641px) and (max-width: 1024px) {
+            #wheelCanvas {
+                width: min(70vw, 600px);
+                height: min(70vw, 600px);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- 主要容器 -->
+    <div
+        class="h-screen w-screen relative bg-gradient-to-b from-[#1e1e1e] to-[#151515] flex items-center justify-center">
+
+        <!-- 轉盤區域 -->
+        <div class="relative">
+            <canvas id="wheelCanvas" width="600" height="600" class="block"></canvas>
+
+            <!-- 指針 -->
+            <div id="pointer"
+                class="absolute top-2 left-1/2 transform -translate-x-1/2 -translate-y-2 transition-transform duration-300 ease-out z-10 filter drop-shadow-[0_10px_6px_rgba(0,0,0,0.6)]">
+                <div class="w-10 h-14 bg-gradient-to-b from-red-500 to-red-600"
+                    style="clip-path: polygon(50% 100%, 0 0, 100% 0);">
+                </div>
+            </div>
+        </div>
+
+        <!-- UI: 左下角 UART 連接圖示按鈕 -->
+        <button id="btnUartIcon" class="absolute bottom-6 left-6 p-3 transition-all z-20 group outline-none"
+            title="連接 UART">
+            <!-- 未連線圖示 (斷開的鏈條) -->
+            <svg id="iconDisconnected" xmlns="http://www.w3.org/2000/svg"
+                class="h-6 w-6 text-gray-600 group-hover:text-gray-300 icon-transition" fill="none" viewBox="0 0 24 24"
+                stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+            <!-- 已連線圖示 (完整的鏈條) - 預設隱藏 -->
+            <svg id="iconConnected" xmlns="http://www.w3.org/2000/svg"
+                class="h-6 w-6 hidden icon-transition text-blue-400" fill="none" viewBox="0 0 24 24"
+                stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+        </button>
+
+        <!-- UI: 右下角 開啟除錯面板按鈕 -->
+        <button id="btnOpenDebug"
+            class="absolute bottom-6 right-6 p-2 text-gray-600 hover:text-gray-300 transition-colors z-20 outline-none"
+            title="打開除錯面板">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+        </button>
+
+        <!-- 除錯面板 (預設隱藏，高度增加以容納標題列) -->
+        <div id="debugContainer"
+            class="hidden absolute bottom-0 w-full h-56 debug-panel z-30 flex flex-col transition-all ease-in-out duration-300 transform translate-y-full opacity-0">
+
+            <!-- 面板標題列 (包含目標顯示與關閉按鈕) -->
+            <div class="flex justify-between items-center px-3 py-2 border-b border-gray-800 bg-black/30">
+                <div class="font-bold text-blue-400 text-xs flex items-center gap-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                        stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                    除錯與監控
+                </div>
+
+                <!-- 整合後的目標顯示區 -->
+                <div class="text-gray-500 text-xs font-mono">
+                    目標 Index: <span id="displayTarget" class="text-white text-sm font-bold mx-1">-</span>
+                    <span id="displayStatus" class="ml-2 text-gray-600">等待啟動</span>
+                </div>
+
+                <!-- 關閉按鈕 -->
+                <button id="btnCloseDebug" class="text-gray-500 hover:text-white transition-colors p-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                        stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- 面板內容區 -->
+            <div class="flex-1 flex gap-4 p-3 overflow-hidden text-xs">
+                <!-- 左側：發送設定 -->
+                <div class="flex flex-col gap-2 w-1/3 border-r border-gray-800 pr-3">
+                    <div class="font-bold text-gray-400 mb-1">手動發送 (模擬 Putty)</div>
+                    <div class="flex gap-2">
+                        <input type="text" id="txtManualInput" placeholder="輸入字元 (例如 3)"
+                            class="bg-[#222] border border-gray-700 text-white px-2 py-1 rounded w-full focus:outline-none focus:border-blue-500 placeholder-gray-600">
+                        <button id="btnManualSend"
+                            class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded border border-gray-600 transition-colors">Send</button>
+                    </div>
+                    <div class="flex gap-4 mt-1">
+                        <label class="flex items-center gap-1 cursor-pointer hover:text-gray-300 transition-colors"
+                            title="Putty 預設通常是 CR (\r)">
+                            <input type="checkbox" id="chkAddCR" checked
+                                class="text-blue-500 rounded bg-gray-700 border-gray-600">
+                            加 \r (CR)
+                        </label>
+                        <label class="flex items-center gap-1 cursor-pointer hover:text-gray-300 transition-colors">
+                            <input type="checkbox" id="chkAddLF" checked
+                                class="text-blue-500 rounded bg-gray-700 border-gray-600">
+                            加 \n (LF)
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 右側：Log -->
+                <div class="flex-1 flex flex-col overflow-hidden">
+                    <div class="font-bold text-gray-400 mb-1 flex justify-between items-center">
+                        <span>TX 通訊紀錄</span>
+                        <button id="btnClearLog"
+                            class="text-gray-500 hover:text-white text-[10px] transition-colors px-1 rounded border border-gray-700 hover:bg-gray-700">清除</button>
+                    </div>
+                    <div id="consoleLog"
+                        class="flex-1 overflow-y-auto font-mono text-gray-300 break-all select-text bg-[#0a0a0a] p-2 rounded border border-gray-800/50 shadow-inner">
+                        <div class="text-gray-700 italic">尚未發送資料...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 錯誤提示 -->
+        <div id="errorBanner"
+            class="hidden absolute top-4 bg-red-900/90 text-white px-4 py-3 rounded-lg border border-red-500/50 transition-all shadow-lg z-50 backdrop-blur-sm flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-red-300" fill="none" viewBox="0 0 24 24"
+                stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span id="errorText"></span>
+        </div>
+
+    </div>
+
+
+
+    <!-- Host Info Panel -->
+    <div id="hostInfo" class="hidden absolute top-4 left-4 z-40 group">
+        <div id="hostInfoContainer" data-expanded="true"
+            class="flex items-stretch gap-x-0 bg-black/60 backdrop-blur-md border border-gray-700 rounded-lg shadow-xl transition-all duration-300 ease-in-out overflow-hidden">
+
+            <!-- QR Code Section (Always Visible) -->
+            <div class="p-2 flex-shrink-0 z-20 bg-transparent relative flex items-center justify-center">
+                <div class="bg-white p-1 rounded">
+                    <div id="qrcode" class="w-20 h-20"></div>
+                </div>
+            </div>
+
+            <!-- Info Section (Collapsible) -->
+            <div id="hostInfoDetails" data-expanded="true" class="flex items-center gap-2 transition-all duration-300 ease-in-out origin-left whitespace-nowrap overflow-hidden
+                       max-w-0 opacity-0
+                       data-[expanded=true]:max-w-[60vw] data-[expanded=true]:opacity-100 data-[expanded=true]:pr-2
+                       md:data-[expanded=true]:max-w-[500px]">
+                <div>
+                    <div class="flex items-center bg-gray-800/50 p-2 rounded border border-gray-700/50 cursor-pointer hover:bg-gray-700/50 transition-colors"
+                        id="copyLinkBtn">
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[10px] text-gray-500 uppercase">Room ID</div>
+                            <div id="displayRoomId" class="font-mono text-sm truncate text-white">Generating...</div>
+                        </div>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-400 ml-2" fill="none"
+                            viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <div class="mt-3 flex items-center justify-left text-xs">
+                        <span class="text-gray-400 mr-1">已連線人數:</span>
+                        <span id="clientCount" class="font-bold text-green-400">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Toggle Button -->
+            <button id="btnToggleHostInfo" class="w-6 flex items-center justify-center bg-gray-800/30 hover:bg-gray-700/50 transition-all duration-200 cursor-pointer border-l border-gray-700/50 self-stretch overflow-hidden
+                       opacity-100
+                       md:w-0 md:opacity-0
+                       md:group-hover:w-6 md:group-hover:opacity-100">
+                <svg id="iconToggleArrow" xmlns="http://www.w3.org/2000/svg"
+                    class="h-4 w-4 text-gray-400 transition-transform duration-300" fill="none" viewBox="0 0 24 24"
+                    stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Guest Info Panel (Pill Shape) -->
+    <div id="guestInfo" class="hidden absolute top-4 left-4 z-40">
+        <div
+            class="bg-black/60 backdrop-blur-md border border-gray-700 rounded-full px-4 py-2 shadow-xl flex items-center gap-3 transition-all hover:bg-black/80">
+            <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" id="guestStatusDot"></span>
+            <span id="guestStatusText" class="text-sm font-medium text-gray-200">連線中...</span>
+        </div>
+    </div>
+
+    <script>
+        // --- 設定常數 ---
+        const SEGMENTS = 8;
+        const FRICTION = 0.15;
+        const MIN_ROUNDS = 5;
+        const MAX_ROUNDS_ADD = 5;
+        const COLORS = [
+            "#E74C3C", "#3498DB", "#F1C40F", "#2ECC71",
+            "#9B59B6", "#E67E22", "#1ABC9C", "#34495E"
+        ];
+
+        // --- 全域變數 ---
+        let canvas, ctx;
+        let isConnected = false;
+        let isSpinning = false;
+        let currentAngle = 90.0;
+        let velocity = 0;
+        let animFrameId = null;
+
+        // Serial
+        let port = null;
+        let writer = null;
+        let reader = null;
+        let keepReading = false;
+
+        // Multiplayer State
+        const appState = {
+            mode: null, // 'HOST' or 'GUEST'
+            peer: null,
+            conn: null, // For Guest
+            connections: [], // For Host
+            hostId: null
+        };
+
+        // DOM 元素參考
+        const elBtnUartIcon = document.getElementById('btnUartIcon');
+        const elIconDisconnected = document.getElementById('iconDisconnected');
+        const elIconConnected = document.getElementById('iconConnected');
+        const elPointer = document.getElementById('pointer'); // 新增指針參考
+
+        const elDisplayTarget = document.getElementById('displayTarget');
+        const elDisplayStatus = document.getElementById('displayStatus');
+        const elErrorBanner = document.getElementById('errorBanner');
+        const elErrorText = document.getElementById('errorText');
+
+        // Debug DOM
+        const elBtnOpenDebug = document.getElementById('btnOpenDebug');
+        const elBtnCloseDebug = document.getElementById('btnCloseDebug');
+        const elDebugContainer = document.getElementById('debugContainer');
+        const elTxtManualInput = document.getElementById('txtManualInput');
+        const elBtnManualSend = document.getElementById('btnManualSend');
+        const elChkAddCR = document.getElementById('chkAddCR');
+        const elChkAddLF = document.getElementById('chkAddLF');
+        const elConsoleLog = document.getElementById('consoleLog');
+        const elBtnClearLog = document.getElementById('btnClearLog');
+
+        // Multiplayer DOM
+        // Multiplayer DOM
+        // const elModeModal = document.getElementById('modeModal'); // Removed
+        // const elBtnModeHost = document.getElementById('btnModeHost'); // Removed
+        // const elBtnModeGuest = document.getElementById('btnModeGuest'); // Removed
+        // const elLobbyPanel = document.getElementById('lobbyPanel'); // Removed
+        const elHostInfo = document.getElementById('hostInfo');
+        const elHostInfoContainer = document.getElementById('hostInfoContainer');
+        const elHostInfoDetails = document.getElementById('hostInfoDetails');
+        const elBtnToggleHostInfo = document.getElementById('btnToggleHostInfo');
+        const elIconToggleArrow = document.getElementById('iconToggleArrow');
+        const elGuestInfo = document.getElementById('guestInfo');
+        const elDisplayRoomId = document.getElementById('displayRoomId');
+        const elClientCount = document.getElementById('clientCount');
+        const elGuestStatusDot = document.getElementById('guestStatusDot');
+        const elGuestStatusText = document.getElementById('guestStatusText');
+        const elCopyLinkBtn = document.getElementById('copyLinkBtn');
+        const elQrcode = document.getElementById('qrcode');
+
+        // Toggle Logic
+        if (elBtnToggleHostInfo) {
+            elBtnToggleHostInfo.addEventListener('click', () => {
+                const isExpanded = elHostInfoContainer.getAttribute('data-expanded') === 'true';
+                const newState = !isExpanded;
+
+                elHostInfoContainer.setAttribute('data-expanded', newState);
+                elHostInfoDetails.setAttribute('data-expanded', newState); // Also set on details for Tailwind data- attribute logic
+
+                if (newState) {
+                    elIconToggleArrow.classList.remove('rotate-180');
+                } else {
+                    elIconToggleArrow.classList.add('rotate-180');
+                }
+            });
+        }
+
+        // --- 輔助函式 ---
+
+        function showError(msg) {
+            elErrorText.textContent = msg;
+            elErrorBanner.classList.remove('hidden');
+            // 簡單的動畫效果
+            requestAnimationFrame(() => {
+                elErrorBanner.classList.add('translate-y-2', 'opacity-100');
+                elErrorBanner.classList.remove('translate-y-0', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                elErrorBanner.classList.remove('translate-y-2', 'opacity-100');
+                elErrorBanner.classList.add('translate-y-0', 'opacity-0');
+                setTimeout(() => elErrorBanner.classList.add('hidden'), 300);
+            }, 5000);
+        }
+
+        function logToConsole(str, hex) {
+            const div = document.createElement('div');
+            const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+            div.innerHTML = `<span class="text-gray-600">[${time}]</span> <span class="text-blue-400">TX ></span> <span class="text-gray-300">${str}</span> <span class="text-gray-600 text-[10px] ml-1">(${hex})</span>`;
+
+            // 如果是第一筆，移除 placeholder
+            if (elConsoleLog.querySelector('.italic')) {
+                elConsoleLog.innerHTML = '';
+            }
+
+            elConsoleLog.appendChild(div);
+            elConsoleLog.scrollTop = elConsoleLog.scrollHeight;
+        }
+
+        function toggleDebugPanel(show) {
+            if (show) {
+                elDebugContainer.classList.remove('hidden');
+                // Trigger reflow for transition
+                elDebugContainer.offsetHeight;
+                elDebugContainer.classList.remove('translate-y-full', 'opacity-0');
+                elBtnOpenDebug.classList.add('opacity-0', 'pointer-events-none'); // 隱藏開啟按鈕
+            } else {
+                elDebugContainer.classList.add('translate-y-full', 'opacity-0');
+                elBtnOpenDebug.classList.remove('opacity-0', 'pointer-events-none'); // 顯示開啟按鈕
+                // 等待動畫結束再 hidden
+                setTimeout(() => {
+                    if (elDebugContainer.classList.contains('opacity-0')) {
+                        elDebugContainer.classList.add('hidden');
+                    }
+                }, 300);
+            }
+        }
+
+        // --- 核心功能 ---
+
+        // 核心發送函式 (統一處理行結尾)
+        async function sendSerialData(content) {
+            if (!isConnected || !writer) {
+                logToConsole(content, "Not Connected");
+                // 如果在除錯模式下，沒連線也顯示個提示
+                if (!elDebugContainer.classList.contains('hidden')) {
+                    // Optional: 可以在這裡閃爍一下連接按鈕提示用戶
+                }
+                return;
+            }
+
+            try {
+                let finalStr = content;
+                let suffixDesc = "";
+
+                if (elChkAddCR.checked) {
+                    finalStr += "\r";
+                    suffixDesc += "\\r";
+                }
+                if (elChkAddLF.checked) {
+                    finalStr += "\n";
+                    suffixDesc += "\\n";
+                }
+
+                const encoder = new TextEncoder();
+                const data = encoder.encode(finalStr);
+
+                await writer.write(data);
+
+                const hex = Array.from(data).map(b => '0x' + b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+                logToConsole(`${content}${suffixDesc}`, hex);
+
+            } catch (e) {
+                console.error("UART Write Error:", e);
+                showError("UART 傳送失敗: " + e.message);
+                // 斷線處理
+                isConnected = false;
+                updateUartIconState();
+            }
+        }
+
+        // --- Canvas 邏輯 (維持不變) ---
+
+        function initCanvas() {
+            canvas = document.getElementById('wheelCanvas');
+            if (!canvas) return;
+            ctx = canvas.getContext('2d');
+
+            const dpr = window.devicePixelRatio || 1;
+            let rect = canvas.getBoundingClientRect();
+            let w = rect.width;
+            let h = rect.height;
+
+            if (w === 0 || h === 0) { w = 600; h = 600; }
+
+            canvas.width = w * dpr;
+            canvas.height = h * dpr;
+            ctx.scale(dpr, dpr);
+            canvas.style.width = `${w}px`;
+            canvas.style.height = `${h}px`;
+
+            drawWheel();
+        }
+
+        function drawWheel() {
+            if (!ctx) return;
+            const dpr = window.devicePixelRatio || 1;
+            const width = canvas.width / dpr;
+            const height = canvas.height / dpr;
+            if (width === 0 || height === 0) return;
+
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const radius = Math.max(0, width / 2 - 20);
+            const step = (2 * Math.PI) / SEGMENTS;
+
+            ctx.clearRect(0, 0, width, height);
+
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(-currentAngle * Math.PI / 180);
+
+            for (let i = 0; i < SEGMENTS; i++) {
+                // 扇形
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.arc(0, 0, radius, i * step, (i + 1) * step);
+                ctx.closePath();
+
+                ctx.fillStyle = COLORS[i % COLORS.length];
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = "#1e1e1e";
+                ctx.stroke();
+
+                // 文字
+                ctx.save();
+                const midAngle = i * step + step / 2;
+                const textDist = radius * 0.75;
+                const tx = Math.cos(midAngle) * textDist;
+                const ty = Math.sin(midAngle) * textDist;
+
+                ctx.translate(tx, ty);
+                ctx.rotate(midAngle + Math.PI / 2);
+
+                ctx.fillStyle = "white";
+                ctx.font = "bold 32px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(i.toString(), 0, 0);
+                ctx.restore();
+            }
+
+            // 中心點
+            ctx.beginPath();
+            ctx.arc(0, 0, 20, 0, 2 * Math.PI);
+
+            // 建立放射狀漸層 (調整顏色以降低高光)
+            const gradient = ctx.createRadialGradient(0, 0, 15, 0, 0, 20);
+            gradient.addColorStop(0, '#eeeeee');
+            gradient.addColorStop(1, '#999999');
+
+            ctx.fillStyle = gradient;
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 5;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 2;
+
+            ctx.fill();
+            ctx.shadowColor = 'transparent';
+            ctx.restore();
+        }
+
+        // 旋轉邏輯
+        function spinWheel(networkResult = null) {
+            if (isSpinning) return;
+
+            // 如果是 Guest 且沒有收到網路指令，則不能自己轉
+            if (appState.mode === 'GUEST' && networkResult === null) {
+                console.log("Guest cannot initiate spin");
+                return;
+            }
+
+            // 決定結果：如果是網路指令則用網路的，否則隨機
+            const result = networkResult !== null ? networkResult : Math.floor(Math.random() * SEGMENTS);
+
+            // 如果是 Host 且是主動觸發，則廣播
+            if (appState.mode === 'HOST' && networkResult === null) {
+                broadcast({ type: 'SPIN', result: result });
+            }
+
+            // 更新 UI
+            elDisplayTarget.textContent = result;
+            elDisplayTarget.className = "text-yellow-400 text-sm font-bold mx-1"; // 高亮目標
+            elDisplayStatus.textContent = "旋轉中...";
+
+            // 指針動畫：抬起
+            if (elPointer) {
+                elPointer.classList.add('-translate-y-6');
+                elPointer.classList.remove('-translate-y-2');
+            }
+
+            isSpinning = true;
+
+            // 發送 UART (僅 Host 發送)
+            if (appState.mode !== 'GUEST') {
+                sendSerialData(result.toString());
+            }
+
+            // 物理計算
+            const step = 360 / SEGMENTS;
+            const targetCenterCw = (result * step) + (step / 2);
+            const targetRotation = 90 + targetCenterCw;
+
+            let currentMod = currentAngle % 360;
+            if (currentMod < 0) currentMod += 360;
+
+            let diff = targetRotation - currentMod;
+            if (diff < 0) diff += 360;
+
+            const extraRounds = MIN_ROUNDS + Math.floor(Math.random() * (MAX_ROUNDS_ADD + 1));
+            const totalRotation = (extraRounds * 360) + diff;
+
+            const k = Math.floor(Math.sqrt(2 * totalRotation / FRICTION));
+            velocity = (totalRotation + FRICTION * k * (k - 1) / 2) / k;
+
+            animate();
+        }
+
+        function animate() {
+            if (!isSpinning) return;
+            currentAngle += velocity;
+            velocity -= FRICTION;
+
+            if (velocity <= 0) {
+                velocity = 0;
+                isSpinning = false;
+                elDisplayTarget.className = "text-white text-sm font-bold mx-1"; // 恢復目標顏色
+                elDisplayStatus.textContent = "完成";
+
+                // 指針動畫：放下
+                if (elPointer) {
+                    elPointer.classList.remove('-translate-y-6');
+                    elPointer.classList.add('-translate-y-2');
+                }
+            }
+
+            drawWheel();
+            if (isSpinning) {
+                animFrameId = requestAnimationFrame(animate);
+            }
+        }
+
+        async function readSerialLoop() {
+            while (port && port.readable && keepReading) {
+                try {
+                    reader = port.readable.getReader();
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) {
+                            // reader has been canceled.
+                            break;
+                        }
+                        if (value) {
+                            // 收到任何資料都觸發抽獎
+                            console.log("Serial Data Received", value);
+                            if (!isSpinning && appState.mode !== 'GUEST') {
+                                spinWheel();
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error("Serial Read Error:", error);
+                } finally {
+                    if (reader) {
+                        reader.releaseLock();
+                    }
+                }
+            }
+        }
+
+        // --- Multiplayer Logic ---
+
+        function initApp() {
+            // Check URL params
+            const urlParams = new URLSearchParams(window.location.search);
+            const joinId = urlParams.get('id');
+
+            if (joinId) {
+                // Auto-join as Guest
+                setupGuest(joinId);
+            } else {
+                // Default to Host
+                setupHost();
+            }
+        }
+
+        function setupHost() {
+            appState.mode = 'HOST';
+            elHostInfo.classList.remove('hidden');
+
+            // Init Peer
+            appState.peer = new Peer(); // Auto-generate ID
+
+            appState.peer.on('open', (id) => {
+                appState.hostId = id;
+                elDisplayRoomId.textContent = id;
+
+                // Generate QR
+                const joinUrl = `${window.location.origin}${window.location.pathname}?id=${id}`;
+                new QRCode(elQrcode, {
+                    text: joinUrl,
+                    width: 80,
+                    height: 80,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.L
+                });
+
+                // Copy Link Handler
+                elCopyLinkBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+
+                    const copyText = (text) => {
+                        // Try modern Clipboard API first
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            return navigator.clipboard.writeText(text);
+                        }
+                        // Fallback for older browsers or non-HTTPS
+                        return new Promise((resolve, reject) => {
+                            const textArea = document.createElement('textarea');
+                            textArea.value = text;
+                            textArea.style.position = 'fixed';
+                            textArea.style.left = '-9999px';
+                            document.body.appendChild(textArea);
+                            textArea.select();
+                            try {
+                                document.execCommand('copy');
+                                resolve();
+                            } catch (err) {
+                                reject(err);
+                            }
+                            document.body.removeChild(textArea);
+                        });
+                    };
+
+                    const originalText = elDisplayRoomId.textContent;
+                    copyText(joinUrl)
+                        .then(() => {
+                            elDisplayRoomId.textContent = "Copied!";
+                            setTimeout(() => elDisplayRoomId.textContent = originalText, 1000);
+                        })
+                        .catch((err) => {
+                            console.error('Copy failed:', err);
+                            elDisplayRoomId.textContent = "複製失敗";
+                            setTimeout(() => elDisplayRoomId.textContent = originalText, 1000);
+                        });
+                });
+            });
+
+            appState.peer.on('connection', (conn) => {
+                appState.connections.push(conn);
+                updateClientCount();
+
+                conn.on('open', () => {
+                    // Send initial config if needed (optional)
+                    conn.send({ type: 'CONFIG', segments: SEGMENTS, colors: COLORS });
+                });
+
+                conn.on('close', () => {
+                    appState.connections = appState.connections.filter(c => c !== conn);
+                    updateClientCount();
+                });
+            });
+        }
+
+        function setupGuest(hostId) {
+            appState.mode = 'GUEST';
+            elGuestInfo.classList.remove('hidden');
+            elBtnUartIcon.classList.add('hidden'); // Guest doesn't need Serial
+            elBtnOpenDebug.classList.add('hidden'); // Guest doesn't need Debug
+
+            appState.peer = new Peer();
+
+            appState.peer.on('open', (id) => {
+                const conn = appState.peer.connect(hostId);
+                appState.conn = conn;
+
+                conn.on('open', () => {
+                    elGuestStatusDot.classList.remove('bg-yellow-500', 'animate-pulse');
+                    elGuestStatusDot.classList.add('bg-green-500');
+                    elGuestStatusText.textContent = "已連線";
+                });
+
+                conn.on('data', (data) => {
+                    console.log("Received:", data);
+                    if (data.type === 'SPIN') {
+                        spinWheel(data.result);
+                    }
+                });
+
+                conn.on('close', () => {
+                    elGuestStatusDot.classList.remove('bg-green-500');
+                    elGuestStatusDot.classList.add('bg-red-500');
+                    elGuestStatusText.textContent = "已斷線";
+                });
+
+                conn.on('error', (err) => {
+                    console.error(err);
+                    showError("連線錯誤");
+                });
+            });
+        }
+
+        function broadcast(data) {
+            appState.connections.forEach(conn => {
+                if (conn.open) {
+                    conn.send(data);
+                }
+            });
+        }
+
+        function updateClientCount() {
+            elClientCount.textContent = appState.connections.length;
+        }
+
+        // --- UART 連接 ---
+
+        // 更新圖示狀態 UI
+        function updateUartIconState() {
+            if (isConnected) {
+                elIconDisconnected.classList.add('hidden');
+                elIconConnected.classList.remove('hidden');
+                elBtnUartIcon.title = "UART 已連接";
+            } else {
+                elIconDisconnected.classList.remove('hidden');
+                elIconConnected.classList.add('hidden');
+                elBtnUartIcon.title = "連接 UART";
+            }
+        }
+
+        async function connectSerial() {
+            // 如果已經連線，點擊則斷線 (可選功能，這裡先實作斷線邏輯)
+            if (isConnected) {
+                if (writer) {
+                    await writer.releaseLock();
+                    writer = null;
+                }
+                if (port) {
+                    await port.close();
+                    port = null;
+                }
+                isConnected = false;
+                updateUartIconState();
+                logToConsole("---", "已斷開連接");
+                return;
+            }
+
+            if (!("serial" in navigator)) {
+                showError("此瀏覽器不支援 Web Serial API");
+                return;
+            }
+
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({
+                    baudRate: 9600, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none"
+                });
+
+                writer = port.writable.getWriter();
+
+                isConnected = true;
+                updateUartIconState();
+                logToConsole("---", "已連接成功");
+
+            } catch (err) {
+                console.error(err);
+                // 用戶取消不顯示錯誤
+                if (!err.message.includes('No port selected')) {
+                    showError(`連接失敗: ${err.message}`);
+                }
+            }
+        }
+
+        // --- 事件綁定 ---
+        window.addEventListener('DOMContentLoaded', () => {
+            initCanvas();
+            initApp(); // Initialize Multiplayer Logic
+
+            // UI 事件
+            // UI 事件
+            // elBtnModeHost.addEventListener('click', setupHost); // Removed
+            // elBtnModeGuest.addEventListener('click', ...); // Removed
+
+            elBtnUartIcon.addEventListener('click', async () => {
+                await connectSerial();
+                if (isConnected) {
+                    keepReading = true;
+                    readSerialLoop();
+                } else {
+                    keepReading = false;
+                    if (reader) await reader.cancel();
+                }
+            });
+            elBtnOpenDebug.addEventListener('click', () => toggleDebugPanel(true));
+            elBtnCloseDebug.addEventListener('click', () => toggleDebugPanel(false));
+
+            // Debug 面板功能事件
+            elBtnManualSend.addEventListener('click', () => {
+                const txt = elTxtManualInput.value;
+                if (txt) {
+                    sendSerialData(txt);
+                    elTxtManualInput.value = '';
+                }
+            });
+
+            elBtnClearLog.addEventListener('click', () => {
+                elConsoleLog.innerHTML = '<div class="text-gray-700 italic">尚未發送資料...</div>';
+            });
+
+            // 全域按鍵事件
+            window.addEventListener('keydown', (e) => {
+                // 空白鍵啟動轉盤
+                if (e.code === 'Space' && !isSpinning) {
+                    // 如果焦點在輸入框，不觸發轉盤
+                    if (document.activeElement === elTxtManualInput) return;
+                    // Guest 不能用空白鍵觸發
+                    if (appState.mode === 'GUEST') return;
+
+                    e.preventDefault();
+                    spinWheel();
+                }
+                // 輸入框內按 Enter 發送
+                if (e.code === 'Enter' && document.activeElement === elTxtManualInput) {
+                    elBtnManualSend.click();
+                }
+                // 按 Esc 關閉除錯面板
+                if (e.code === 'Escape' && !elDebugContainer.classList.contains('hidden')) {
+                    toggleDebugPanel(false);
+                }
+            });
+        });
+
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(initCanvas, 100);
+        });
+
+    </script>
+</body>
+
+</html>
