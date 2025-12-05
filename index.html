@@ -305,7 +305,7 @@
                 <!-- 右側：Log -->
                 <div class="flex-1 flex flex-col overflow-hidden">
                     <div class="font-bold text-gray-400 mb-1 flex justify-between items-center">
-                        <span>TX 通訊紀錄</span>
+                        <span>通訊紀錄</span>
                         <button id="btnClearLog"
                             class="text-gray-500 hover:text-white text-[10px] transition-colors px-1 rounded border border-gray-700 hover:bg-gray-700">清除</button>
                     </div>
@@ -502,10 +502,12 @@
             }, 5000);
         }
 
-        function logToConsole(str, hex) {
+        function logToConsole(str, hex, type = 'TX') {
             const div = document.createElement('div');
             const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
-            div.innerHTML = `<span class="text-gray-600">[${time}]</span> <span class="text-blue-400">TX ></span> <span class="text-gray-300">${str}</span> <span class="text-gray-600 text-[10px] ml-1">(${hex})</span>`;
+            const typeColor = type === 'RX' ? 'text-green-400' : 'text-blue-400';
+            const typeSymbol = type === 'RX' ? '<' : '>';
+            div.innerHTML = `<span class="text-gray-600">[${time}]</span> <span class="${typeColor}">${type} ${typeSymbol}</span> <span class="text-gray-300">${str}</span> <span class="text-gray-600 text-[10px] ml-1">(${hex})</span>`;
 
             // 如果是第一筆，移除 placeholder
             if (elConsoleLog.querySelector('.italic')) {
@@ -761,8 +763,13 @@
                             break;
                         }
                         if (value) {
-                            // 收到任何資料都觸發抽獎
+                            // Log received data
+                            const decoder = new TextDecoder();
+                            const receivedStr = decoder.decode(value).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+                            const hex = Array.from(value).map(b => '0x' + b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+                            logToConsole(receivedStr, hex, 'RX');
                             console.log("Serial Data Received", value);
+                            // 收到任何資料都觸發抽獎
                             if (!isSpinning && appState.mode !== 'GUEST') {
                                 spinWheel();
                             }
