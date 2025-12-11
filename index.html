@@ -768,9 +768,7 @@
                             const receivedStr = decoder.decode(value).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
                             const hex = Array.from(value).map(b => '0x' + b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
                             logToConsole(receivedStr, hex, 'RX');
-                            console.log("Serial Data Received", value);
-                            // 收到任何資料都觸發抽獎
-                            if (!isSpinning && appState.mode !== 'GUEST') {
+                            if (receivedStr == 's' && !isSpinning && appState.mode !== 'GUEST') {
                                 spinWheel();
                             }
                         }
