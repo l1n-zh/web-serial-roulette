@@ -673,7 +673,7 @@
         }
 
         // 旋轉邏輯
-        function spinWheel(networkResult = null) {
+        function spinWheel(networkResult = null, networkExtraRounds = null) {
             if (isSpinning) return;
 
             // 如果是 Guest 且沒有收到網路指令，則不能自己轉
@@ -683,11 +683,14 @@
             }
 
             // 決定結果：如果是網路指令則用網路的，否則隨機
-            const result = networkResult !== null ? networkResult : Math.floor(Math.random() * SEGMENTS);
 
+            let result = networkResult
+            let extraRounds = networkExtraRounds
             // 如果是 Host 且是主動觸發，則廣播
             if (appState.mode === 'HOST' && networkResult === null) {
-                broadcast({ type: 'SPIN', result: result });
+                result = Math.floor(Math.random() * SEGMENTS);
+                extraRounds = MIN_ROUNDS + Math.floor(Math.random() * (MAX_ROUNDS_ADD + 1));
+                broadcast({ type: 'SPIN', result: result, extraRounds: extraRounds });
             }
 
             // 更新 UI
@@ -719,7 +722,7 @@
             let diff = targetRotation - currentMod;
             if (diff < 0) diff += 360;
 
-            const extraRounds = MIN_ROUNDS + Math.floor(Math.random() * (MAX_ROUNDS_ADD + 1));
+            // const extraRounds = MIN_ROUNDS + Math.floor(Math.random() * (MAX_ROUNDS_ADD + 1));
             const totalRotation = (extraRounds * 360) + diff;
 
             const k = Math.floor(Math.sqrt(2 * totalRotation / FRICTION));
@@ -899,7 +902,7 @@
                 conn.on('data', (data) => {
                     console.log("Received:", data);
                     if (data.type === 'SPIN') {
-                        spinWheel(data.result);
+                        spinWheel(data.result, data.extraRounds);
                     }
                 });
 
