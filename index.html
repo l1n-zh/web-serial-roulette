@@ -708,7 +708,7 @@
 
             // 發送 UART (僅 Host 發送)
             if (appState.mode !== 'GUEST') {
-                sendSerialData(result.toString());
+                sendSerialData(result.toString()+","+extraRounds.toString());
             }
 
             // 物理計算
