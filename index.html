@@ -300,6 +300,27 @@
                             加 \n (LF)
                         </label>
                     </div>
+                    
+                    <div class="border-t border-gray-800 my-2"></div>
+
+                    <div class="flex justify-between items-center mb-1">
+                        <div class="font-bold text-gray-400">指定結果 (Cheat)</div>
+                        <div id="lblCheatStatus" class="text-[10px] text-yellow-500 font-mono hidden">
+                            Next: <span id="valCheatNext" class="font-bold"></span> (等待觸發)
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2">
+                        <input type="number" id="txtCheatInput" min="0" max="7" placeholder="Index (0-7)"
+                            class="bg-[#222] border border-gray-700 text-white px-2 py-1 rounded w-full focus:outline-none focus:border-yellow-500 placeholder-gray-600">
+                        <button id="btnCheatSet"
+                            class="bg-gray-700 hover:bg-yellow-700 text-white px-3 py-1 rounded border border-gray-600 hover:border-yellow-500 transition-colors whitespace-nowrap">
+                            Set
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex-1 flex flex-col overflow-hidden">
                 </div>
 
                 <!-- 右側：Log -->
@@ -395,7 +416,7 @@
     <script>
         // --- 設定常數 ---
         const SEGMENTS = 8;
-        const FRICTION = 0.15;
+        const FRICTION = 0.13;
         const MIN_ROUNDS = 5;
         const MAX_ROUNDS_ADD = 5;
         const COLORS = [
@@ -410,6 +431,8 @@
         let currentAngle = 90.0;
         let velocity = 0;
         let animFrameId = null;
+        let pendingCheatIndex = null;
+
 
         // Serial
         let port = null;
@@ -447,6 +470,10 @@
         const elChkAddLF = document.getElementById('chkAddLF');
         const elConsoleLog = document.getElementById('consoleLog');
         const elBtnClearLog = document.getElementById('btnClearLog');
+        const elBtnCheatSet = document.getElementById('btnCheatSet');
+        const elTxtCheatInput = document.getElementById('txtCheatInput');
+        const elLblCheatStatus = document.getElementById('lblCheatStatus');
+        const elValCheatNext = document.getElementById('valCheatNext');
 
         // Multiplayer DOM
         // Multiplayer DOM
@@ -673,32 +700,54 @@
         }
 
         // 旋轉邏輯
+        // 移除了第三個參數，因為現在透過全域變數 pendingCheatIndex 控制
         function spinWheel(networkResult = null, networkExtraRounds = null) {
             if (isSpinning) return;
 
-            // 如果是 Guest 且沒有收到網路指令，則不能自己轉
             if (appState.mode === 'GUEST' && networkResult === null) {
                 console.log("Guest cannot initiate spin");
                 return;
             }
 
-            // 決定結果：如果是網路指令則用網路的，否則隨機
+            let result;
+            let extraRounds;
 
-            let result = networkResult
-            let extraRounds = networkExtraRounds
-            // 如果是 Host 且是主動觸發，則廣播
-            if (appState.mode === 'HOST' && networkResult === null) {
-                result = Math.floor(Math.random() * SEGMENTS);
+            // 1. 網路指令 (Guest)
+            if (networkResult !== null) {
+                result = networkResult;
+                extraRounds = networkExtraRounds;
+            } 
+            // 2. Host 主動觸發 (UART 's' 或 空白鍵)
+            else {
+                // --- 修改重點開始 ---
+                // 檢查是否有「預約」的結果
+                if (pendingCheatIndex !== null) {
+                    result = pendingCheatIndex;
+                    console.log(`[Cheat] 觸發預設結果: ${result}`);
+                    
+                    // 使用完畢後清除預約狀態
+                    pendingCheatIndex = null;
+                    elLblCheatStatus.classList.add('hidden'); // 隱藏 UI 提示
+                } else {
+                    // 沒有預約，則隨機
+                    result = Math.floor(Math.random() * SEGMENTS);
+                }
+                // --- 修改重點結束 ---
+
                 extraRounds = MIN_ROUNDS + Math.floor(Math.random() * (MAX_ROUNDS_ADD + 1));
-                broadcast({ type: 'SPIN', result: result, extraRounds: extraRounds });
+
+                if (appState.mode === 'HOST') {
+                    broadcast({ type: 'SPIN', result: result, extraRounds: extraRounds });
+                }
             }
 
             // 更新 UI
             elDisplayTarget.textContent = result;
-            elDisplayTarget.className = "text-yellow-400 text-sm font-bold mx-1"; // 高亮目標
+            // 如果是作弊結果，讓顯示文字變黃色以示區別，否則白色
+            if(networkResult === null && pendingCheatIndex !== null) { /* 剛被清空，這裡很難判斷，略過 */ }
+            elDisplayTarget.className = "text-yellow-400 text-sm font-bold mx-1"; 
             elDisplayStatus.textContent = "旋轉中...";
 
-            // 指針動畫：抬起
             if (elPointer) {
                 elPointer.classList.add('-translate-y-6');
                 elPointer.classList.remove('-translate-y-2');
@@ -706,12 +755,11 @@
 
             isSpinning = true;
 
-            // 發送 UART (僅 Host 發送)
             if (appState.mode !== 'GUEST') {
-                sendSerialData(result.toString()+","+extraRounds.toString());
+                sendSerialData(result.toString() + "," + extraRounds.toString());
             }
 
-            // 物理計算
+            // ... 以下物理計算保持不變 ...
             const step = 360 / SEGMENTS;
             const targetCenterCw = (result * step) + (step / 2);
             const targetRotation = 90 + targetCenterCw;
@@ -722,9 +770,7 @@
             let diff = targetRotation - currentMod;
             if (diff < 0) diff += 360;
 
-            // const extraRounds = MIN_ROUNDS + Math.floor(Math.random() * (MAX_ROUNDS_ADD + 1));
             const totalRotation = (extraRounds * 360) + diff;
-
             const k = Math.floor(Math.sqrt(2 * totalRotation / FRICTION));
             velocity = (totalRotation + FRICTION * k * (k - 1) / 2) / k;
 
@@ -1018,6 +1064,25 @@
                 if (txt) {
                     sendSerialData(txt);
                     elTxtManualInput.value = '';
+                }
+            });
+                        
+            elBtnCheatSet.addEventListener('click', () => {
+                const val = parseInt(elTxtCheatInput.value, 10);
+                
+                if (!isNaN(val) && val >= 0 && val < SEGMENTS) {
+                    // 1. 儲存預約值
+                    pendingCheatIndex = val;
+                    
+                    // 2. 更新 UI 顯示狀態
+                    elValCheatNext.textContent = val;
+                    elLblCheatStatus.classList.remove('hidden');
+                    
+                    // 3. 輸入框視覺回饋 (閃爍黃色)
+                    elTxtCheatInput.style.borderColor = '#EAB308';
+                    setTimeout(() => elTxtCheatInput.style.borderColor = '', 200);
+                } else {
+                    alert(`請輸入 0 到 ${SEGMENTS - 1} 之間的數字`);
                 }
             });
 
