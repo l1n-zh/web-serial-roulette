@@ -416,7 +416,7 @@
     <script>
         // --- 設定常數 ---
         const SEGMENTS = 8;
-        const FRICTION = 0.13;
+        const FRICTION = 0.15;
         const MIN_ROUNDS = 5;
         const MAX_ROUNDS_ADD = 5;
         const COLORS = [
@@ -432,6 +432,7 @@
         let velocity = 0;
         let animFrameId = null;
         let pendingCheatIndex = null;
+        let lastTime = 0;
 
 
         // Serial
@@ -698,9 +699,13 @@
             ctx.shadowColor = 'transparent';
             ctx.restore();
         }
+        // 定義緩動變數 (放在全域變數區)
+        let startAngle = 0;
+        let finalAngle = 0;
+        let spinStartTime = 0;
+        let spinDuration = 0;
 
-        // 旋轉邏輯
-        // 移除了第三個參數，因為現在透過全域變數 pendingCheatIndex 控制
+        // 修改 spinWheel 函式
         function spinWheel(networkResult = null, networkExtraRounds = null) {
             if (isSpinning) return;
 
@@ -712,28 +717,20 @@
             let result;
             let extraRounds;
 
-            // 1. 網路指令 (Guest)
+            // 1. 決定結果 (邏輯不變)
             if (networkResult !== null) {
                 result = networkResult;
                 extraRounds = networkExtraRounds;
-            } 
-            // 2. Host 主動觸發 (UART 's' 或 空白鍵)
-            else {
-                // --- 修改重點開始 ---
-                // 檢查是否有「預約」的結果
+            } else {
                 if (pendingCheatIndex !== null) {
                     result = pendingCheatIndex;
-                    console.log(`[Cheat] 觸發預設結果: ${result}`);
-                    
-                    // 使用完畢後清除預約狀態
                     pendingCheatIndex = null;
-                    elLblCheatStatus.classList.add('hidden'); // 隱藏 UI 提示
+                    elLblCheatStatus.classList.add('hidden');
                 } else {
-                    // 沒有預約，則隨機
                     result = Math.floor(Math.random() * SEGMENTS);
                 }
-                // --- 修改重點結束 ---
-
+                
+                // 隨機圈數 (這裡決定轉多久/轉幾圈)
                 extraRounds = MIN_ROUNDS + Math.floor(Math.random() * (MAX_ROUNDS_ADD + 1));
 
                 if (appState.mode === 'HOST') {
@@ -743,9 +740,7 @@
 
             // 更新 UI
             elDisplayTarget.textContent = result;
-            // 如果是作弊結果，讓顯示文字變黃色以示區別，否則白色
-            if(networkResult === null && pendingCheatIndex !== null) { /* 剛被清空，這裡很難判斷，略過 */ }
-            elDisplayTarget.className = "text-yellow-400 text-sm font-bold mx-1"; 
+            elDisplayTarget.className = "text-yellow-400 text-sm font-bold mx-1";
             elDisplayStatus.textContent = "旋轉中...";
 
             if (elPointer) {
@@ -759,43 +754,84 @@
                 sendSerialData(result.toString() + "," + extraRounds.toString());
             }
 
-            // ... 以下物理計算保持不變 ...
+            // --- 修改重點：改用 Easing 計算 ---
+            
+            // 1. 計算目標角度
             const step = 360 / SEGMENTS;
-            const targetCenterCw = (result * step) + (step / 2);
-            const targetRotation = 90 + targetCenterCw;
+            // 為了讓指針指在扇形中間，需要加上 step/2
+            // 注意：原本邏輯是 rotate(-currentAngle)，所以目標角度也是負的或反向思考
+            // 這裡我們簡化邏輯：currentAngle 是一直增加的 (順時針旋轉轉盤 = 逆時針旋轉畫布)
+            
+            // 計算目標相對於 0 度的位置
+            const targetIndexAngle = (result * step) + (step / 2);
+            
+            // 我們的指針在上方 (90度位置)，所以要校正
+            // 目標是讓 (targetIndexAngle) 轉到 (270度/90度) 的位置
+            // 這裡沿用你原本的邏輯修正：
+            const targetRotation = 90 + targetIndexAngle;
 
+            // 2. 計算從現在角度 (currentAngle) 到目標角度的總距離
             let currentMod = currentAngle % 360;
             if (currentMod < 0) currentMod += 360;
-
+            
             let diff = targetRotation - currentMod;
-            if (diff < 0) diff += 360;
-
+            if (diff < 0) diff += 360; // 確保是正向旋轉
+            
+            // 總共要轉的角度 = 額外圈數 + 補足目標的差值
             const totalRotation = (extraRounds * 360) + diff;
-            const k = Math.floor(Math.sqrt(2 * totalRotation / FRICTION));
-            velocity = (totalRotation + FRICTION * k * (k - 1) / 2) / k;
 
+            // 3. 設定動畫參數
+            startAngle = currentAngle;
+            finalAngle = currentAngle + totalRotation;
+            
+            // 設定時間：根據圈數動態調整，讓轉動看起來自然 (例如每圈 0.8 ~ 1 秒)
+            // 基礎時間 3秒 + 每多一圈加 0.5 秒，這可以依喜好調整
+            spinDuration = 3000 + (extraRounds * 500); 
+            
+            spinStartTime = performance.now(); // 記錄開始時間
+
+            // 開始動畫
             animate();
         }
+    
+         // 緩動函數：四次方緩出 (模擬摩擦力)
+        // t: 0 到 1 之間的進度 (0% ~ 100%)
+        function easeOutQuart(t) {
+            return 1 - Math.pow(1 - t, 4);
+        }
 
-        function animate() {
+        function animate(currentTime) {
             if (!isSpinning) return;
-            currentAngle += velocity;
-            velocity -= FRICTION;
+            if (!currentTime) currentTime = performance.now();
 
-            if (velocity <= 0) {
-                velocity = 0;
+            // 1. 計算經過的時間進度 (0.0 ~ 1.0)
+            const elapsed = currentTime - spinStartTime;
+            let progress = elapsed / spinDuration;
+
+            // 2. 檢查是否結束
+            if (progress >= 1) {
+                progress = 1;
                 isSpinning = false;
-                elDisplayTarget.className = "text-white text-sm font-bold mx-1"; // 恢復目標顏色
+                
+                // 確保最後角度絕對精準
+                currentAngle = finalAngle; 
+                
+                // UI 收尾
+                elDisplayTarget.className = "text-white text-sm font-bold mx-1";
                 elDisplayStatus.textContent = "完成";
-
-                // 指針動畫：放下
                 if (elPointer) {
                     elPointer.classList.remove('-translate-y-6');
                     elPointer.classList.add('-translate-y-2');
                 }
+            } else {
+                // 3. 使用緩動函數計算當前角度
+                // 公式：當前 = 起點 + (總距離 * 進度變率)
+                const ease = easeOutQuart(progress);
+                currentAngle = startAngle + (finalAngle - startAngle) * ease;
             }
 
             drawWheel();
+
             if (isSpinning) {
                 animFrameId = requestAnimationFrame(animate);
             }
